@@ -254,19 +254,171 @@ Summarize the patterns in 2–3 sentences and identify the "directions" the user
 
 > "Your references lean dark-background, serif headlines, and pill-shaped stats. 5 of 8 use a 'Trusted by' or 'Featured in' logo strip at the bottom. None use a personal photo in the banner itself. You gravitate toward proof-dense designs with clean typography, not minimalist or text-heavy narrative styles."
 
-#### 3b. Brand audit (onboarding questions)
+#### 3b. Brand mining — DO NOT SKIP THIS
 
-Ask the user:
+**This is the single most important step for a brand-matched banner.** The skill's default palette is a warm dark with terracotta — it will NOT match most users' brands. You must either (a) ask the user directly for their tokens, or (b) mine them from an existing website/asset.
 
-1. **Do you have brand hex codes?** Specifically: background, primary accent, text color, muted/secondary text. If yes, get them all. If no, offer the default palette (below).
+**Never guess brand colors from qualitative descriptions** ("looks dark navy with red accents"). Qualitative descriptions produce hex codes that are close but wrong, and "close but wrong" reads as a fake brand match. Always extract **actual pixel values** from real assets.
 
-2. **Do you have a personal logo or monogram?** PNG or SVG with transparent background. If yes, ask for the file path or have them share the image. If no, offer to generate a simple text-based monogram in HTML/CSS, or skip the monogram.
+There are THREE mining modes. Pick based on what the user provides:
 
-3. **Do you have a professional headshot?** Optional — only needed if they pick the Photo+Proof layout variant. B&W or color both work. High resolution preferred (1000px+ on short side).
+##### Mode A — User provides tokens directly
 
-4. **Typography preference?** Default is **DM Serif Display** (headlines) + **Inter** (body/UI), both free from Google Fonts. Ask if they want a different combination. If they don't know, use the default.
+The easiest case. Ask:
 
-5. **Customer brand logos — do you have them locally?** If not, the skill will source them in Phase 4a using Simple Icons CDN and Wikimedia Commons fallbacks.
+1. **Hex codes:** background (primary), accent (brand color), text, muted
+2. **Logo or monogram:** PNG or SVG with transparent background
+3. **Headshot:** only if they pick the Photo+Proof variant
+4. **Typography:** font family names (Google Fonts preferred)
+5. **Customer brand logos:** do they have them locally or should the skill source them
+
+If the user has all of these, you're done — skip to 3c.
+
+##### Mode B — User has a website (mine from the live site)
+
+**Use this when:** the user has a personal website, portfolio, blog, or landing page. Their brand is already defined there — extract it, don't invent it.
+
+Perform these 4 steps in order:
+
+**Step 1 — Extract CSS tokens via WebFetch.**
+
+```
+WebFetch URL: {user's website URL}
+Prompt: "Extract raw brand identity tokens. Return:
+ 1. All CSS custom properties (--variables) in :root or other selectors, especially color and font
+ 2. All hex color codes in HTML/CSS (#xxxxxx patterns, with context where each appears)
+ 3. All Google Fonts imports (exact URL and family names)
+ 4. Body and heading font-family values (h1/h2/h3/body)
+ 5. Meta theme-color tag if present (often the brand primary)
+ 6. Background colors used in hero section, buttons, CTAs
+ 7. Image references to logo/monogram files (URL + dimensions)
+ 8. Hero banner image URL if the user already has one
+ Return raw data — no summaries, no interpretation."
+```
+
+This gives you CSS-declared values. It does NOT give you the actual rendered colors — which is often different because of gradients, overlays, or image-based backgrounds.
+
+**Step 2 — Download brand image assets.**
+
+If the WebFetch found logo/banner image URLs, download them:
+
+```bash
+curl -sL -A "Mozilla/5.0" "{logo-url}" -o "logos/{user}-logo.{ext}"
+curl -sL -A "Mozilla/5.0" "{banner-url}" -o "brand-assets/existing-banner.{ext}"
+```
+
+If the files are WebP, convert to PNG for easier inspection:
+
+```python
+from PIL import Image
+img = Image.open('brand-assets/existing-banner.webp')
+img.save('brand-assets/existing-banner.png', 'PNG')
+```
+
+**Step 3 — Sample actual pixel colors from brand imagery.**
+
+This is the critical step most agents skip. CSS hex values only cover solid colors — brand identity often lives in gradients, photo-based backgrounds, or image overlays. **Sample the pixels directly.**
+
+```python
+from PIL import Image
+from collections import Counter
+
+img = Image.open('brand-assets/existing-banner.png').convert('RGBA')
+w, h = img.size
+print(f"Banner: {w}x{h}")
+
+# Sample at 9 key points: corners, midpoints, center
+samples = {
+    'top-left':     (10, 10),
+    'top-right':    (w-10, 10),
+    'bottom-left':  (10, h-10),
+    'bottom-right': (w-10, h-10),
+    'mid-left':     (10, h//2),
+    'mid-right':    (w-10, h//2),
+    'center':       (w//2, h//2),
+    'top-mid':      (w//2, 10),
+    'bot-mid':      (w//2, h-10),
+}
+for name, (x, y) in samples.items():
+    r, g, b, a = img.getpixel((x, y))
+    print(f"  {name:14}: #{r:02x}{g:02x}{b:02x}")
+
+# Plus top 5 dominant colors
+pixels = [img.getpixel((x, y))[:3] for x in range(0, w, 20) for y in range(0, h, 20)]
+for color, count in Counter(pixels).most_common(5):
+    r, g, b = color
+    print(f"  dominant: #{r:02x}{g:02x}{b:02x}  ({count} pixels)")
+```
+
+Sampled pixels are **ground truth** — they're literally what the user's brand looks like in context. If the CSS says `#020934` but the banner's bottom-left sample returns `#2cb0da`, that's a gradient and BOTH colors are part of the brand. Use the CSS value as the **anchor** and the sampled dominant colors as **highlights**.
+
+**Step 4 — Identify typography.**
+
+- If the WebFetch returned Google Fonts imports, use the same families
+- If no Google Fonts (system font stack), look at the LOGO. Is it condensed sans? serif? geometric? Pick the closest Google Font match:
+  - **Condensed geometric sans (like Ken Yarmosh's logo):** Archivo Narrow, Oswald, Barlow Condensed
+  - **Geometric sans (like Circular, Proxima Nova):** Inter, Space Grotesk, Archivo
+  - **Humanist sans:** Inter, Work Sans
+  - **Serif:** DM Serif Display, Playfair Display, Fraunces
+  - **Slab serif:** Archivo Slab, Roboto Slab
+- Default if you can't tell: **Inter** for body, **Archivo** or **DM Serif Display** for headlines
+
+**Output of Mode B:** a documented brand token map like:
+
+```css
+/* Mined from {user's website URL} on {date} */
+:root {
+  --bg:        #020934;   /* CSS --ghost-accent-color */
+  --bg-mid:    #1d7aa6;   /* sampled mid-point of existing banner gradient */
+  --bg-light:  #2cb0da;   /* sampled bottom-left of existing banner (brand highlight) */
+  --accent:    #2cb0da;   /* brightest signature color */
+  --accent-hi: #4dc4e8;   /* 10% lighter accent for emphasis */
+  --accent-red: #c94040;  /* CSS announcement bar color (reserve for alert use only) */
+  --text:      #ffffff;
+  --surface:   #0a1642;   /* slightly lighter navy for pill backgrounds */
+  --muted:     #8a9bb8;
+  --border:    #1e2e50;
+}
+
+/* Typography */
+/* Ken's logo is condensed geometric sans → closest Google Fonts match: Archivo Narrow */
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+```
+
+This is what the brand token section should look like BEFORE you start writing HTML. Show it to the user for confirmation: "Here's what I mined from your site — does this feel right?" Let them override if they want.
+
+##### Mode C — User has no website, no tokens, no logo
+
+**Use this when:** the user is early-stage and hasn't built brand identity yet. Don't fake it — offer the default warm dark palette honestly:
+
+```css
+:root {
+  --bg:        #0f0d0b;  /* near-black warm dark */
+  --text:      #fdf7f2;  /* warm cream */
+  --accent:    #b94c4c;  /* terracotta — or user's brand color */
+  --accent-hi: #d05c5c;  /* 10% lighter accent for emphasis */
+  --muted:     #a89a92;  /* warm gray */
+  --border:    #2a2320;
+  --surface:   #161210;
+  --stone:     #d5d0c8;
+  --cream:     #eae6df;
+}
+```
+
+Tell the user: "I'll use a warm dark default palette since you don't have brand tokens yet. If you want a different vibe, pick a primary accent color and I'll rebuild around it."
+
+If the user picks just ONE color (say `#0066ff`), compute the rest:
+- `--accent-hi`: lighten the accent by ~10% (HSL lightness +8–12)
+- `--bg`: pick a very dark near-black that harmonizes (neutral `#0b0d10` or tinted toward the accent hue)
+- `--surface`: slightly lighter than bg (~5% lightness boost)
+- `--text`: near-white (`#fafafa` or `#ffffff`)
+- Keep `--muted`, `--border`, `--stone`, `--cream` as neutrals unless the user wants a specific mood
+
+##### Critical rule: show your work
+
+After mining (Mode A, B, or C), **always show the user the final token map BEFORE building the HTML**. Format it as a code block. Ask: "Does this feel right? Want me to tweak anything?"
+
+This catches wrong colors, bad font picks, and missing tokens before they get baked into a rendered PNG that takes another 20 minutes to redo.
 
 **Default palette if user has nothing:**
 
@@ -1433,6 +1585,9 @@ Every item in this table corresponds to a real problem encountered during the re
 | **Customer brand logos look inconsistent** | Mixing real logos with text wordmarks | Commit to one approach consistently — all real logos (Wikimedia fallback for trademarked) or all text wordmarks |
 | **First render has too many bugs** | Rushing to full content without a base template check | Render a simplified test version first (just the banner box + placeholder text), verify dimensions + fonts load, then add content |
 | **Upload takes forever** | File size too large (over 2 MB) | Reduce JPG quality from 95 to 85 or 90, re-export |
+| **Banner aesthetic doesn't match user's brand** | Skipped brand mining or used qualitative description instead of pixel sampling | Re-do Phase 3b in Mode B: fetch the user's website via WebFetch, extract CSS custom properties + hex codes, download brand imagery, sample actual pixels via Python + Pillow, identify typography from logo, show final token map BEFORE rebuilding HTML |
+| **Colors are "close but wrong"** | Guessed colors from screenshots or verbal descriptions | Never guess. Sample pixels from real brand assets. Use CSS custom properties as anchors and pixel samples as highlights. |
+| **Typography fights the user's existing brand** | Used DM Serif Display default when user's logo is condensed geometric sans | Match typography to logo style, not skill defaults. Archivo Narrow for condensed, Space Grotesk for modern geometric, Playfair for elegant serif, etc. |
 
 ---
 
@@ -1459,6 +1614,8 @@ These are the 10 most important principles from the reference iteration. If the 
 9. **Pills on dark surface background with brighter accent number > pills on tinted-accent background with muted accent number.** This is a contrast issue, not a color preference — the tinted background kills the accent's readability.
 
 10. **The diagnostic test (solid-color PNG) isolates file vs session issues on upload failures.** When "Save failed" appears twice, generate the test image and try to upload that. If it fails, it's LinkedIn. If it succeeds, it's your banner file.
+
+11. **Never guess brand colors from qualitative descriptions.** "Dark navy with red accents" will produce hex codes that are close but wrong, and wrong-hex-codes read as fake. Always extract actual pixel values — either from the user directly (Mode A), from their live website via WebFetch + Python pixel sampling (Mode B), or use the honest default palette (Mode C). See Section 4 Phase 3b — Brand mining for the full protocol. This applies to TYPOGRAPHY too: if a user's logo uses condensed geometric sans, don't default to DM Serif Display just because it's the skill's default.
 
 ---
 
