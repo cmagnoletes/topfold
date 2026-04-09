@@ -600,19 +600,85 @@ Playwright element screenshots are the reliable method. Headless Chrome `--scree
    pkill -f "python3 -m http.server 8879"
    ```
 
-#### 4d. Self-check before showing the user
+#### 4d. Technical self-check
 
-Run these validations before presenting the output:
+Run these technical validations:
 
 - **Dimensions are exactly 1584×396** — check with `sips -g pixelWidth -g pixelHeight file.png`
 - **All images loaded** — check with Playwright `img.complete && img.naturalHeight > 0` before taking the screenshot
-- **No content clipped at edges** — visually inspect the rendered PNG
 - **File size under 2 MB** — `ls -lh file.jpg`
 - **JPG has sRGB profile embedded** — `file banner.jpg` should mention JFIF
+- **Aspect ratio preservation of all child images** — for each `<img>` in the banner, verify rendered width/height ratio matches natural width/height ratio (Playwright: `img.getBoundingClientRect()` vs `img.naturalWidth/naturalHeight`). This catches flex-stretch bugs on logos/monograms.
 
-If any check fails, fix before showing the user.
+If any check fails, fix before moving to 4e.
 
-**Transition criterion:** PNG + JPG exports validate cleanly. Show the user. Move to Phase 5.
+#### 4e. Design critique — NEVER SKIP THIS
+
+**Mandatory pre-delivery step.** After the technical self-check passes, the agent MUST visually inspect the rendered PNG and run a structured design critique before showing anything to the user. Technical validation catches dimensions and file integrity — it does NOT catch visual bugs like stretched logos, cramped layouts, color clashes, or hierarchy problems.
+
+**The critique is non-optional.** If you're tempted to skip this because "it looks fine from the code", that's exactly when the visual bug sneaks through. Code-level inspection cannot replace visual inspection.
+
+**How to run the critique:**
+
+**Step 1: View the rendered PNG.**
+
+Use the `Read` tool with the absolute path to the rendered PNG. This loads the image into the agent's visual context so the agent can actually SEE what it produced, not just imagine it from the HTML.
+
+**Step 2: Run the 10-point checklist.**
+
+Score each point as PASS, FAIL, or WARN. Write down the score explicitly in your reasoning — don't skim.
+
+**VISUAL INTEGRITY**
+1. **Aspect ratios preserved.** All `<img>` elements (logos, monogram, headshot, brand strip) display at their natural width/height ratio. NO stretching or squashing. This is the #1 most common bug — flex containers with default `align-items: stretch` will horizontally distort child images.
+2. **No content clipped at edges.** Nothing runs off the top, bottom, left, or right of the banner. Text doesn't truncate mid-word.
+3. **No element overflow.** Nothing spills outside its container. Grid/flex items stay within their assigned cells.
+
+**PROPORTION & HIERARCHY**
+4. **Headline is the most prominent text.** Larger than stats, labels, eyebrows, and any other text element. The eye should land on the headline first.
+5. **Stat pills are consistently sized.** All pills in the column have the same width and height. No pill is visually dominating or shrinking relative to its siblings.
+6. **Brand strip logos have balanced visual weights.** No single logo dominates while others disappear. Small-but-important logos (Nike swoosh, X, Microsoft wordmark) are bumped to compensate for their intrinsic tiny size.
+7. **Monogram/logo doesn't compete with the headline.** If present, the monogram is a supporting identity anchor, NOT a competing visual element. The headline should be 2-3x larger than the monogram.
+
+**SPACING & ALIGNMENT**
+8. **Consistent alignment.** Left edges of stacked elements line up. Vertical centers match where appropriate. No drifting, no accidental staircase.
+9. **Adequate whitespace.** Nothing feels cramped. There's breathing room between elements and around the banner edges.
+10. **Photo-safe zones respected.** Bottom-left content is pushed right past the 400px photo-safe indent. Middle content past 340px. Top content past 240px.
+
+**Step 3: For each FAIL or WARN, identify the specific cause and fix.**
+
+Common visual bugs and their fixes:
+
+| Visual bug | Cause | Fix |
+|---|---|---|
+| Wordmark/monogram horizontally stretched | Flex column default `align-items: stretch` distorts child `<img>` | Add `align-items: flex-start` to the flex container, OR add `align-self: flex-start` on the image |
+| Headshot distorted in the photo variant | Missing aspect-ratio preservation on cover image | Use `object-fit: cover` with a fixed container aspect-ratio |
+| Stat pills have inconsistent widths | Container width not pinned; each pill sizes to its own content | Add `width: 300px` (or specific px) to `.stats-column`, not `min-width` |
+| Brand logos inconsistent sizes | Different SVG viewBoxes; uniform height CSS produces non-uniform visual weight | Tune per-brand heights via `data-brand` attribute selectors; compensate for viewBox padding (Nike needs +50%) |
+| Headline wrapping awkwardly mid-phrase | Grid `1fr` allowing content to push column wider than intended | Use `grid-template-columns: minmax(0, 1fr) auto` |
+| Text barely visible at display scale | Font sizes designed for native (1584px) but LinkedIn renders at 50% | Bump all fonts ~50% larger than normal web design |
+| Colors clash with user's brand | Used default palette instead of mining user's actual brand tokens | Re-do Phase 3b Mode B (WebFetch + pixel sampling) |
+| Logo competing with headline | Logo height too tall (> 1/3 of headline height) | Reduce logo height; increase gap between logo and headline |
+| Content drifts toward one side of the banner | Hero column grew beyond its grid cell because of nowrap text | Add `min-width: 0` to the hero cell + remove `white-space: nowrap` if present |
+| Cramped layout, everything touching | Too many elements competing | Remove the weakest element (usually eyebrow, tagline, or monogram) |
+
+**Step 4: Apply the fix.**
+
+Edit the HTML/CSS, then re-render via Playwright. Run the critique AGAIN on the new render. Iterate until all 10 points PASS.
+
+**Step 5: Present with the critique attached.**
+
+When showing the user the final banner, include the critique score as a summary:
+
+> Here's the banner. Design critique: ✅ 10/10 passed.
+> - Visual integrity: ✅ ✅ ✅
+> - Proportion & hierarchy: ✅ ✅ ✅ ✅
+> - Spacing & alignment: ✅ ✅ ✅
+
+This tells the user you actually looked at the image, not just wrote HTML and hoped.
+
+**If something can't be fixed** (e.g. the user's logo has a weird aspect ratio that doesn't fit any layout gracefully), call it out explicitly: "Critique: 9/10 passed. The {X} logo's aspect ratio is unusually wide — I'd suggest replacing it with a square monogram or skipping it. Flagged for your decision." Don't silently accept a fail.
+
+**Transition criterion:** Design critique scores 10/10 (or 9/10 with an acknowledged exception). Only then move to Phase 5.
 
 ### Phase 5 — Test & Ship (~15 min + iteration)
 
@@ -1617,6 +1683,8 @@ These are the 10 most important principles from the reference iteration. If the 
 
 11. **Never guess brand colors from qualitative descriptions.** "Dark navy with red accents" will produce hex codes that are close but wrong, and wrong-hex-codes read as fake. Always extract actual pixel values — either from the user directly (Mode A), from their live website via WebFetch + Python pixel sampling (Mode B), or use the honest default palette (Mode C). See Section 4 Phase 3b — Brand mining for the full protocol. This applies to TYPOGRAPHY too: if a user's logo uses condensed geometric sans, don't default to DM Serif Display just because it's the skill's default.
 
+12. **Every render gets a design critique before delivery. No exceptions.** After rendering a PNG, load it via the `Read` tool and run the 10-point visual critique from Phase 4e. Technical validation (dimensions, file size, sRGB profile) does NOT catch visual bugs like stretched logos, cramped layouts, or color clashes — only visual inspection does. The single biggest cause of low-quality deliverables is skipping this step because "it probably looks fine from the code." It doesn't. View the image. Run the checklist. Then show the user.
+
 ---
 
 ## 13. Quick Reference — Full Session Flow
@@ -1632,7 +1700,8 @@ Phase 2 — Copy Architecture (15 min)
 
 Phase 3 — Visual Design (30 min)
   3a. Reference gathering (5–8 banners)
-  3b. Brand audit (palette, fonts, logos, headshot)
+  3b. Brand MINING (Mode A: user provides / Mode B: WebFetch + pixel sample / Mode C: defaults)
+      → produce token map, SHOW USER before moving on
   3c. Layout pick (Numbers Grid / Story Arc / Stacked Pills)
 
 Phase 4 — Build & Render (30 min per variant)
@@ -1645,7 +1714,9 @@ Phase 4 — Build & Render (30 min per variant)
       - Screenshot viewport → PNG
       - PIL export JPG with sRGB
       - Stop server
-  4d. Self-check (dimensions, file size, no clipping)
+  4d. Technical self-check (dimensions, file size, aspect ratios, sRGB)
+  4e. DESIGN CRITIQUE — view PNG via Read tool, run 10-point checklist,
+      fix any FAIL/WARN, repeat until 10/10. NEVER SKIP THIS STEP.
 
 Phase 5 — Test & Ship (15 min + iteration)
   5a. Upload via mobile app first
